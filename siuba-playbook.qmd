@@ -1,0 +1,150 @@
+---
+title: "siuba playbook"
+format:
+  html:
+    code-fold: false
+# places footnotes and cited sources in the margin
+# other layout options (for example placing a 
+# figure in the margin)  will be set on per element
+# in examples below
+reference-location: margin
+---
+
+## R init
+```{r}
+library(tidyverse)
+library(nycflights13)
+flights %>% arrow::write_parquet("flights.parquet")
+
+```
+
+```{r}
+flights
+```
+
+## python init
+
+```{python}
+from siuba import _, group_by, summarize, arrange, filter, select, rename, mutate, distinct, count, left_join, inner_join, gather, spread
+import pandas as pd
+import numpy as np
+```
+
+```{python}
+flights = r.flights
+```
+
+```{python}
+flights = pd.read_parquet("flights.parquet", engine="pyarrow")
+```
+
+
+```{python}
+flights.head()
+```
+
+## Aggregation & Sort
+
+```{r}
+# dplyr
+flights %>%
+  filter(origin %in% c("JFK", "EWR")) %>%
+  group_by(month) %>%
+  summarise(
+    dep_delay_avg = mean(dep_delay, na.rm=TRUE),
+    n_flight = n()
+  ) %>%
+  arrange(desc(dep_delay_avg))
+```
+
+
+```{python}
+# siuba
+(flights 
+  >> filter(_.origin.isin(["JFK", "EWR"])) 
+  >> group_by(_.month) 
+  >> summarize(
+      dep_delay_avg = _.dep_delay.mean(),
+      n_flight = _.flight.size
+    )
+  >> arrange(-_.dep_delay_avg))
+```
+
+```{python}
+# pandas
+(flights
+  .query('origin in ["JFK", "EWR"]')
+  .groupby(['month'])
+  # introduced in 0.25.0, named agg
+  .agg(
+    dep_delay_avg = ('dep_delay', np.mean),
+    n = ('dep_delay', 'size')
+  )
+  .sort_values(by=('dep_delay_avg'), ascending=False)
+  .head()
+)
+```
+
+## For those delayed flights, which are above the average per month, carrier?
+
+```{r}
+# dplyr
+flights %>%
+  group_by(month, carrier) %>%
+  filter(dep_delay > 0) %>%
+  filter(dep_delay > mean(dep_delay))
+```
+
+```{python}
+# siuba
+(flights
+  >> group_by(_.month, _.carrier)
+  >> filter(_.dep_delay > 0)
+  >> filter(_.dep_delay > _.dep_delay.mean())
+)
+```
+
+```{python}
+# pandas - solution 1
+(flights
+  .query("dep_delay > 0")
+  .groupby(['month', 'carrier'])
+  .apply(lambda x : x.assign(
+    dep_delay_avg = lambda k : k['dep_delay'].mean()
+  ))
+  .query("dep_delay > dep_delay_avg")
+  .droplevel([0,1])
+  )
+
+```
+
+```{python}
+# pandas - solution 1
+(flights
+  .query("dep_delay > 0")
+  .groupby(['month', 'carrier'])
+  .apply(lambda x : x.assign(
+    dep_delay_avg = lambda k : k['dep_delay'].mean()
+  ))
+  .query("dep_delay > dep_delay_avg")
+  .droplevel([0,1])
+  )
+  
+# pandas – solution 2
+# calculate stats
+avg_stats = (flights
+  .query("dep_delay > 0")
+  .groupby(['month', 'carrier'])
+  .agg(dep_delay_avg=('dep_delay', 'mean'))
+  .reset_index()
+  )
+
+# filter with stats  
+(flights
+  .merge(avg_stats, on=['month', 'carrier'])
+  .query("dep_delay > dep_delay_avg")
+)
+
+```
+
+
